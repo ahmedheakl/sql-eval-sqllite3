@@ -65,11 +65,11 @@ def run_hf_eval(args):
 
     support_beam_search = True
 
-    
 
     for prompt_file, output_file in zip(prompt_file_list, output_file_list):
         df["prompt"] = df[
-            [
+            [   
+                "arabic",
                 "question",
                 "db_name",
                 "instructions",
