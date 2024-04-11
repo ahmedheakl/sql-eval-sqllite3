@@ -5,7 +5,6 @@ from typing import Optional
 from eval.eval import compare_query_results
 import pandas as pd
 import torch
-import traceback
 from transformers import (
     AutoTokenizer,
     AutoModelForCausalLM,
@@ -18,54 +17,20 @@ from tqdm import tqdm
 from psycopg2.extensions import QueryCanceledError
 from time import time
 import gc
-from peft import PeftModel, PeftConfig
 from utils.reporting import upload_results
-
-device_map = "mps" if torch.backends.mps.is_available() else "auto"
-
-
-def dynamic_num_beams(prompt: str, tokenizer, max_beams: int = 4) -> int:
-    tokens = len(tokenizer.encode(prompt))
-    if tokens <= 1024:
-        return max_beams
-    elif tokens <= 1536:
-        return max_beams // 2
-    else:
-        return max_beams // 4
-
 
 def get_tokenizer_model(model_name: Optional[str], adapter_path: Optional[str]):
     """
     Load a HuggingFace tokenizer and model.
     You may supply either a normal huggingface model name, or a peft adapter path.
     """
-    if adapter_path is not None:
-        print(f"Loading adapter model {adapter_path}")
-        config = PeftConfig.from_pretrained(adapter_path)
-        tokenizer = AutoTokenizer.from_pretrained(config.base_model_name_or_path)
-        model = AutoModelForCausalLM.from_pretrained(
-            config.base_model_name_or_path,
-            torch_dtype=torch.float16,
-            trust_remote_code=True,
-            use_cache=True,
-            device_map=device_map,
-        )
-        print(f"Loading adapter {adapter_path}")
-        model = PeftModel.from_pretrained(model, adapter_path)
-        model = model.merge_and_unload()
-        print(f"Merged adapter {adapter_path}")
-    else:
-        print(f"Loading model {model_name}")
-        try:
-            tokenizer = AutoTokenizer.from_pretrained(model_name)
-        except:
-            tokenizer = AutoTokenizer.from_pretrained("codellama/CodeLlama-34b-hf")
-        model = AutoModelForCausalLM.from_pretrained(
-            model_name,
-            torch_dtype=torch.float16,
-            trust_remote_code=True,
-            device_map=device_map,
-        )
+    tokenizer = AutoTokenizer.from_pretrained(model_name)
+    model = AutoModelForCausalLM.from_pretrained(
+        model_name,
+        torch_dtype=torch.float16,
+        trust_remote_code=True,
+        device_map="auto",
+    )
     return tokenizer, model
 
 
@@ -88,41 +53,23 @@ def run_hf_eval(args):
 
     print(f"Questions prepared\nNow loading model...")
     # initialize tokenizer and model
-    tokenizer, model = get_tokenizer_model(model_name, adapter_path)
-    model.tie_weights()
+    # tokenizer, model = get_tokenizer_model(model_name, adapter_path)
+    # model.tie_weights()
 
     print("model loaded\nnow generating and evaluating predictions...")
 
     # from here, we generate and evaluate predictions
     # eos_token_id = tokenizer.convert_tokens_to_ids(["```"])[0]
-    pipe = pipeline("text-generation", model=model, tokenizer=tokenizer)
+    # pipe = pipeline("text-generation", model=model, tokenizer=tokenizer)
 
     support_beam_search = True
 
-    # check that the model supports beam search with a try except statement
-    try:
-        pipe("Hi", num_beams=2, do_sample=False, max_new_tokens=5)
-    except AttributeError as e:
-        error_trace = traceback.format_exception(type(e), e, e.__traceback__)
-        support_beam_search = (
-            len([line for line in error_trace if "self.beam_search" in line]) == 0
-        )
-        if not support_beam_search:
-            print(
-                "WARNING: This model does not support beam search. will use num_beams=1"
-            )
-        else:
-            raise e
-
     # get questions
     print("Preparing questions...")
-    print(
-        f"Using {'all' if num_questions is None else num_questions} question(s) from {questions_file}"
-    )
     df = prepare_questions_df(questions_file, db_type, num_questions, k_shot)
+    print(df)
 
     for prompt_file, output_file in zip(prompt_file_list, output_file_list):
-        # create a prompt for each question
         df["prompt"] = df[
             [
                 "question",
@@ -159,6 +106,7 @@ def run_hf_eval(args):
             ),
             axis=1,
         )
+        print(df['prompt'][0])
 
         total_tried = 0
         total_correct = 0
@@ -169,15 +117,13 @@ def run_hf_eval(args):
                 total_tried += 1
                 start_time = time()
 
-                num_beams = 1
-                if support_beam_search:
-                    num_beams = dynamic_num_beams(row["prompt"], tokenizer)
+                num_beams = 1 + int(support_beam_search)
 
                 # we set return_full_text to False so that we don't get the prompt text in the generated text
                 # this simplifies our postprocessing to deal with just the truncation of the end of the query
                 generated_query = pipe(
                     row["prompt"],
-                    max_new_tokens=300,
+                    max_new_tokens=100,
                     do_sample=False,
                     num_beams=num_beams,
                     num_return_sequences=1,

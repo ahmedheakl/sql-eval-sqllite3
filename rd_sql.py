@@ -1,15 +1,79 @@
-# this file contains all of the helper functions used for evaluations
-import sqlite3
-import itertools
-import re
-import pandas as pd
-from pandas.testing import assert_frame_equal, assert_series_equal
+from sqlite3 import connect
 import numpy as np
+from typing import Dict, List, Optional
+import json
+import os
+import pandas as pd
+import re
+from utils.questions import prepare_questions_df
+import itertools
+from sqlalchemy import create_engine
 
-LIKE_PATTERN = r"LIKE[\s\S]*'"
+db_path = "data/defog_data/{db_name}/{db_name}.db"
+
+
+def to_prompt_schema(
+    md: Dict[str, List[Dict[str, str]]], seed: Optional[int] = None
+) -> str:
+    """
+    Return a DDL statement for creating tables from a metadata dictionary
+    `md` has the following structure:
+        {'table1': [
+            {'column_name': 'col1', 'data_type': 'int', 'column_description': 'primary key'},
+            {'column_name': 'col2', 'data_type': 'text', 'column_description': 'not null'},
+            {'column_name': 'col3', 'data_type': 'text', 'column_description': ''},
+        ],
+        'table2': [
+        ...
+        ]},
+    This is just for converting the dictionary structure of one's metadata into a string
+    for pasting into prompts, and not meant to be used to initialize a database.
+    seed is used to shuffle the order of the tables when not None
+    """
+    md_create = ""
+    table_names = list(md.keys())
+    if seed:
+        np.random.seed(seed)
+        np.random.shuffle(table_names)
+    for table in table_names:
+        md_create += f"CREATE TABLE {table} (\n"
+        columns = md[table]
+        if seed:
+            np.random.seed(seed)
+            np.random.shuffle(columns)
+        for i, column in enumerate(columns):
+            col_name = column["column_name"]
+            # if column name has spaces, wrap it in double quotes
+            if " " in col_name:
+                col_name = f'"{col_name}"'
+            dtype = column["data_type"]
+            col_desc = column.get("column_description", "").replace("\n", " ")
+            if col_desc:
+                col_desc = f" --{col_desc}"
+            if i < len(columns) - 1:
+                md_create += f"  {col_name} {dtype},{col_desc}\n"
+            else:
+                # avoid the trailing comma for the last line
+                md_create += f"  {col_name} {dtype}{col_desc}\n"
+        md_create += ");\n"
+    return md_create
+
+def get_db(db_name):
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    file_path = os.path.join(script_dir, f"data/defog_data/{db_name}/{db_name}.json")
+    with open(file_path, "r") as f:
+        db_schema = json.load(f)
+    return db_schema
 
 def convert_postgres_to_sqlite3(sql):
-    """Converts a Postgres SQL query to a compatible SQLite3 query.
+    """
+    Converts a Postgres SQL query to a compatible SQLite3 query.
+
+    Args:
+        sql: The Postgres SQL query string.
+
+    Returns:
+        The converted SQLite3 query string.
     """
     # Replace unsupported features
     sql = sql.replace("::float", "/1.0")  # Cast to float using division
@@ -52,6 +116,56 @@ def convert_postgres_to_sqlite3(sql):
     
     return sql
 
+def find_bracket_indices(s: str, start_index: int = 0) -> "tuple[int, int]":
+    start = s.find("{", start_index)
+    end = s.find("}", start + 1)
+    if start == -1 or end == -1:
+        return (-1, -1)
+    return (start, end)
+
+def get_all_minimal_queries(query: str) -> "list[str]":
+    """
+    extrapolate all possible queries
+    - split by semicolon. this is to accommodate queries where joins to other tables are also acceptable.
+    - expand all column permutations if there are braces { } in it. eg:
+    ```sql
+        SELECT {user.id, user.name} FROM user;
+    ```
+    Would be expanded to:
+    ```sql
+        SELECT user.id FROM user;
+        SELECT user.name FROM user;
+        SELECT user.id, user.name FROM user;
+    ```
+    """
+    queries = query.split(";")
+    result_queries = []
+    for query in queries:
+        query = query.strip()
+        if query == "":
+            continue
+        start, end = find_bracket_indices(query, 0)
+        if (start, end) == (-1, -1):
+            result_queries.append(query)
+            continue
+        else:
+            # get all possible column subsets
+            column_options = query[start + 1 : end].split(",")
+            column_combinations = list(
+                itertools.chain.from_iterable(
+                    itertools.combinations(column_options, r)
+                    for r in range(1, len(column_options) + 1)
+                )
+            )
+            for column_tuple in column_combinations:
+                left = query[:start]
+                column_str = ", ".join(column_tuple)
+                right = query[end + 1 :]
+                # change group by size dynamically if necessary
+                if right.find("GROUP BY {}"):
+                    right = right.replace("GROUP BY {}", f"GROUP BY {column_str}")
+                result_queries.append(left + column_str + right)
+    return result_queries
 
 def normalize_table(
     df: pd.DataFrame, query_category: str, question: str, sql: str = None
@@ -132,81 +246,6 @@ def normalize_table(
     sorted_df = sorted_df.reset_index(drop=True)
     return sorted_df
 
-
-# for escaping percent signs in regex matches
-def escape_percent(match):
-    # Extract the matched group
-    group = match.group(0)
-    # Replace '%' with '%%' within the matched group
-    escaped_group = group.replace("%", "%%")
-    # Return the escaped group
-    return escaped_group
-
-
-# find start and end index of { } in a string. return (start, end) if found, else return (-1, -1)
-def find_bracket_indices(s: str, start_index: int = 0) -> "tuple[int, int]":
-    start = s.find("{", start_index)
-    end = s.find("}", start + 1)
-    if start == -1 or end == -1:
-        return (-1, -1)
-    return (start, end)
-
-
-# extrapolate all possible queries from a query with { } in it
-def get_all_minimal_queries(query: str) -> "list[str]":
-    """
-    extrapolate all possible queries
-    - split by semicolon. this is to accommodate queries where joins to other tables are also acceptable.
-    - expand all column permutations if there are braces { } in it. eg:
-    ```sql
-        SELECT {user.id, user.name} FROM user;
-    ```
-    Would be expanded to:
-    ```sql
-        SELECT user.id FROM user;
-        SELECT user.name FROM user;
-        SELECT user.id, user.name FROM user;
-    ```
-    """
-    queries = query.split(";")
-    result_queries = []
-    for query in queries:
-        query = query.strip()
-        if query == "":
-            continue
-        start, end = find_bracket_indices(query, 0)
-        if (start, end) == (-1, -1):
-            result_queries.append(query)
-            continue
-        else:
-            # get all possible column subsets
-            column_options = query[start + 1 : end].split(",")
-            column_combinations = list(
-                itertools.chain.from_iterable(
-                    itertools.combinations(column_options, r)
-                    for r in range(1, len(column_options) + 1)
-                )
-            )
-            for column_tuple in column_combinations:
-                left = query[:start]
-                column_str = ", ".join(column_tuple)
-                right = query[end + 1 :]
-                # change group by size dynamically if necessary
-                if right.find("GROUP BY {}"):
-                    right = right.replace("GROUP BY {}", f"GROUP BY {column_str}")
-                result_queries.append(left + column_str + right)
-    return result_queries
-
-
-def clean_metadata_string(md_str: str) -> str:
-    # for every line, remove all text after "--"
-    md_str = "\n".join([line.split("--")[0] for line in md_str.split("\n")])
-    # remove all ", \n);"
-    md_str = md_str.replace(", \n);", "\n);").replace(",\n);", "\n);").strip()
-    md_str = md_str.split("Here is a list of joinable columns:")[0].strip()
-    return md_str
-
-
 def compare_df(
     df_gold: pd.DataFrame,
     df_gen: pd.DataFrame,
@@ -244,110 +283,47 @@ def compare_df(
             
     return True
 
-def query_sqllite3_db(query: str, db_name: str, timeout: float = 10.0) -> pd.DataFrame:
-    """
-    Queries a sqllite3 database and returns the result as a pandas dataframe.
-    """
-    try:
-        conn = sqlite3.connect(f"data/defog_data/{db_name}/{db_name}.db")
-        df = pd.read_sql_query(query, conn)
-        conn.close()    
-    except Exception as e:
-        print("Error querying database: ", e)
-        return None
-    return df
 
 
-def subset_df(
-    df_sub: pd.DataFrame,
-    df_super: pd.DataFrame,
-    query_category: str,
-    question: str,
-    query_super: str = None,
-    query_sub: str = None,
-    verbose: bool = False,
-) -> bool:
-    """
-    Checks if df_sub is a subset of df_super
-    """
-    if df_sub.empty:
-        return False  # handle cases for empty dataframes
+def main():
+    eval_paths = ["data/instruct_basic_postgres.csv", "data/instruct_advanced_postgres.csv", "data/questions_gen_postgres.csv"]
+    # eval_paths = ["data/instruct_basic_postgres.csv", ]
+    for eval_path in eval_paths:
+        eval_df = pd.read_csv(eval_path)
+        worked = 0
+        for i, row in eval_df.iterrows():
+            
+            db_name = row["db_name"]
+            conn = connect(db_path.format(db_name=db_name))
+            c = conn.cursor()
+            old_query = row["query"]
+            minimals = get_all_minimal_queries(old_query)
+            engine = create_engine(f'postgresql://postgres:postgres@localhost/{db_name}')
 
-    # make a copy of df_super so we don't modify the original while keeping track of matches
-    df_super_temp = df_super.copy(deep=True)
-    matched_columns = []
-    for col_sub_name in df_sub.columns:
-        col_match = False
-        for col_super_name in df_super_temp.columns:
-            col_sub = df_sub[col_sub_name].sort_values().reset_index(drop=True)
-            col_super = (
-                df_super_temp[col_super_name].sort_values().reset_index(drop=True)
-            )
-            try:
-                assert_series_equal(
-                    col_sub, col_super, check_dtype=False, check_names=False
-                )
-                col_match = True
-                matched_columns.append(col_super_name)
-                # remove col_super_name to prevent us from matching it again
-                df_super_temp = df_super_temp.drop(columns=[col_super_name])
-                break
-            except AssertionError:
-                continue
-        if col_match == False:
-            if verbose:
-                print(f"no match for {col_sub_name}")
-            return False
-    df_sub_normalized = normalize_table(df_sub, query_category, question, query_sub)
-
-    # get matched columns from df_super, and rename them with columns from df_sub, then normalize
-    df_super_matched = df_super[matched_columns].rename(
-        columns=dict(zip(matched_columns, df_sub.columns))
-    )
-    df_super_matched = normalize_table(
-        df_super_matched, query_category, question, query_super
-    )
-
-    try:
-        assert_frame_equal(df_sub_normalized, df_super_matched, check_dtype=False)
-        return True
-    except AssertionError:
-        return False
+            local_worked = 0
+            for minimal in minimals:
+                try:
+                    gold_df = pd.read_sql_query(minimal, engine)
+                    query = convert_postgres_to_sqlite3(minimal)
+                    gen_df = pd.read_sql_query(query, conn)
+                    correct = compare_df(gold_df, gen_df, row["query_category"], row["question"])
+                    # if not correct:
+                    #     print(f"Error in {db_name} row {i}\nQuery: {query}\nOld Query: {old_query}\n")
+                    local_worked += correct
+                except Exception as e:
+                    pass
+                    # print(f"Error in {db_name}: {e}\nQuery: {query}\nOld Query: {old_query}\n")
+            
+            worked += (local_worked / len(minimals))
 
 
-def compare_query_results(
-    query_gold: str,
-    query_gen: str,
-    db_name: str,
-    db_type: str,
-    db_creds: dict,
-    question: str,
-    query_category: str,
-    table_metadata_string: str = "",
-    timeout: float = 10.0,
-) -> "tuple[bool, bool]":
-    """
-    Compares the results of two queries and returns a tuple of booleans, where the first element is
-    whether the queries produce exactly the same result, and the second element is whether the
-    result of the gold query is a subset of the result of the generated query (still correct).
-    We bubble up exceptions (mostly from query_postgres_db) to be handled in the runner.
-    """
-    query_gen = convert_postgres_to_sqlite3(query_gen)
-    queries_gold = get_all_minimal_queries(query_gold)
-    results_gen = query_sqllite3_db(query_gen, db_name, timeout)
-    if(results_gen is None):
-        return (False, False)
-    
+        print(eval_path)
+        print(f"Worked: {worked}/{len(eval_df)}. Percentage: {worked * 100/len(eval_df):.2f}%\n\n")
 
-    correct = False
-    for q in queries_gold:
-        q = convert_postgres_to_sqlite3(q)
-        results_gold = query_sqllite3_db(q, db_name, timeout)
-        
-        if compare_df(
-            results_gold, results_gen, query_category, question, query_gold, query_gen
-        ):
-            return (True, True)
-        elif subset_df(results_gold, results_gen, query_category, question):
-            correct = True
-    return (False, correct)
+
+
+       
+
+
+if __name__ == "__main__":
+    main()

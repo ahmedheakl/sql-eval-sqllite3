@@ -1,4 +1,4 @@
-from utils.pruning import prune_metadata_str, to_prompt_schema
+from utils.pruning import to_prompt_schema
 
 
 def generate_prompt(
@@ -20,26 +20,15 @@ def generate_prompt(
     shuffle_metadata=False,
 ):
 
-    from defog_data.metadata import dbs  # to avoid CI error
+    from data.defog_data.metadata import dbs  # to avoid CI error
 
     with open(prompt_file, "r") as f:
         prompt = f.read()
-    question_instructions = question + " " + instructions
 
     if table_metadata_string == "":
-        if columns_to_keep > 0:
-            table_metadata_string = prune_metadata_str(
-                question_instructions,
-                db_name,
-                public_data,
-                columns_to_keep,
-                shuffle_metadata,
-            )
-        elif columns_to_keep == 0:
-            md = dbs[db_name]["table_metadata"]
-            table_metadata_string = to_prompt_schema(md, shuffle_metadata)
-        else:
-            raise ValueError("columns_to_keep must be >= 0")
+        md = dbs[db_name]["table_metadata"]
+        table_metadata_string = to_prompt_schema(md, shuffle_metadata)
+
     if glossary == "":
         glossary = dbs[db_name]["glossary"]
 
