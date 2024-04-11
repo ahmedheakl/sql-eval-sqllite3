@@ -39,8 +39,6 @@ if __name__ == "__main__":
             "prompts/prompt_sqlcoder.md",
             "-o",
             "output.txt",
-            "--questions_file",
-            "data/questions_gen_postgres.csv",
             '--model',
             'ahmedheakl/sqlcoder-7b-2-ArabicSQLV6'
         ]

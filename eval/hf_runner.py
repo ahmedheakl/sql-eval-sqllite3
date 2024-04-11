@@ -85,7 +85,7 @@ def run_hf_eval(args):
         ].apply(
             lambda row: generate_prompt(
                 prompt_file,
-                row["question"],
+                row["arabic"],
                 row["db_name"],
                 row["instructions"],
                 row["k_shot_prompt"],
@@ -103,7 +103,6 @@ def run_hf_eval(args):
             ),
             axis=1,
         )
-        print(df['prompt'][0])
 
         total_tried = 0
         total_correct = 0
