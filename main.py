@@ -11,7 +11,7 @@ if __name__ == "__main__":
     parser.add_argument("-d", "--use_private_data", action="store_true")
     # model-related parameters
     parser.add_argument("-g", "--model_type", type=str, required=True)
-    parser.add_argument("-m", "--model", type=str)
+    parser.add_argument("-m", "--model", type=str, default="ahmedheakl/sqlcoder-7b-2-ArabicSQLV6")
     parser.add_argument("-a", "--adapter", type=str)
     parser.add_argument("--api_url", type=str)
     # inference-technique-related parameters
@@ -27,6 +27,7 @@ if __name__ == "__main__":
     parser.add_argument("-u", "--timeout_exec", type=float, default=10.0)
     parser.add_argument("-v", "--verbose", action="store_true")
     parser.add_argument("--upload_url", type=str)
+    parser.add_argument("--target_column", type=str, default="arabic")
 
 
     args = parser.parse_args(
@@ -38,9 +39,7 @@ if __name__ == "__main__":
             "-f",
             "prompts/prompt_sqlcoder.md",
             "-o",
-            "output.txt",
-            '--model',
-            'ahmedheakl/sqlcoder-7b-2-ArabicSQLV6'
+            "output.csv",
         ]
     )
 

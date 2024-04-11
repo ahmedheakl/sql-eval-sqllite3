@@ -86,7 +86,7 @@ def run_hf_eval(args):
         ].apply(
             lambda row: generate_prompt(
                 prompt_file,
-                row["arabic"],
+                row[args.target_column],
                 row["db_name"],
                 row["instructions"],
                 row["k_shot_prompt"],
@@ -183,21 +183,5 @@ def run_hf_eval(args):
         del output_df["prompt"]
         print(output_df.groupby("query_category")[["correct", "error_db_exec"]].mean())
         output_df = output_df.sort_values(by=["db_name", "query_category", "question"])
-        # get directory of output_file and create if not exist
-        output_dir = os.path.dirname(output_file)
-        if not os.path.exists(output_dir):
-            os.makedirs(output_dir)
         output_df.to_csv(output_file, index=False, float_format="%.2f")
 
-        results = output_df.to_dict("records")
-        # upload results
-        with open(prompt_file, "r") as f:
-            prompt = f.read()
-        if args.upload_url is not None:
-            upload_results(
-                results=results,
-                url=args.upload_url,
-                runner_type="hf_runner",
-                prompt=prompt,
-                args=args,
-            )
