@@ -46,6 +46,9 @@ def run_hf_eval(args):
     k_shot = args.k_shot
     db_type = args.db_type
 
+    print("Preparing questions...")
+    df = prepare_questions_df(questions_file, db_type, num_questions, k_shot)
+    
     if model_name is None and adapter_path is None:
         raise ValueError(
             "You must supply either a model name or an adapter path to run an evaluation."
@@ -62,9 +65,7 @@ def run_hf_eval(args):
 
     support_beam_search = True
 
-    print("Preparing questions...")
-    df = prepare_questions_df(questions_file, db_type, num_questions, k_shot)
-    print(df)
+    
 
     for prompt_file, output_file in zip(prompt_file_list, output_file_list):
         df["prompt"] = df[

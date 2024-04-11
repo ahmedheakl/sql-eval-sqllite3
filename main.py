@@ -5,7 +5,7 @@ from eval.hf_runner import run_hf_eval
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     # data-related parameters
-    parser.add_argument("-q", "--questions_file", type=str)
+    parser.add_argument("-q", "--questions_file", type=str, default="data/instruct_basic_postgres.csv")
     parser.add_argument("-n", "--num_questions", type=int, default=None)
     parser.add_argument("-db", "--db_type", type=str, required=True)
     parser.add_argument("-d", "--use_private_data", action="store_true")
