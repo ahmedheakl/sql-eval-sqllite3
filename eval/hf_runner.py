@@ -52,19 +52,16 @@ def run_hf_eval(args):
         )
 
     print(f"Questions prepared\nNow loading model...")
-    # initialize tokenizer and model
-    # tokenizer, model = get_tokenizer_model(model_name, adapter_path)
-    # model.tie_weights()
+    tokenizer, model = get_tokenizer_model(model_name, adapter_path)
+    model.tie_weights()
 
     print("model loaded\nnow generating and evaluating predictions...")
 
-    # from here, we generate and evaluate predictions
-    # eos_token_id = tokenizer.convert_tokens_to_ids(["```"])[0]
-    # pipe = pipeline("text-generation", model=model, tokenizer=tokenizer)
+    eos_token_id = tokenizer.convert_tokens_to_ids(["```"])[0]
+    pipe = pipeline("text-generation", model=model, tokenizer=tokenizer)
 
     support_beam_search = True
 
-    # get questions
     print("Preparing questions...")
     df = prepare_questions_df(questions_file, db_type, num_questions, k_shot)
     print(df)

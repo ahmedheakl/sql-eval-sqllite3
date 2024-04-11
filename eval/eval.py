@@ -253,7 +253,8 @@ def query_sqllite3_db(query: str, db_name: str, timeout: float = 10.0) -> pd.Dat
         df = pd.read_sql_query(query, conn)
         conn.close()    
     except Exception as e:
-        print("Error querying database: ", e)
+        from psycopg2.extensions import QueryCanceledError
+        raise QueryCanceledError()
         return None
     return df
 
@@ -335,9 +336,6 @@ def compare_query_results(
     query_gen = convert_postgres_to_sqlite3(query_gen)
     queries_gold = get_all_minimal_queries(query_gold)
     results_gen = query_sqllite3_db(query_gen, db_name, timeout)
-    if(results_gen is None):
-        return (False, False)
-    
 
     correct = False
     for q in queries_gold:
