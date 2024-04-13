@@ -37,7 +37,7 @@ if __name__ == "__main__":
             "-g",
             "hf",
             "-f",
-            "prompts/prompt_sqlcoder.md",
+            "prompts/prompt_sqlcoder2.md",
             "-o",
             "output.csv",
         ]
