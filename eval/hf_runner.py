@@ -1,5 +1,3 @@
-import json
-import os
 from typing import Optional
 
 from eval.eval import compare_query_results
@@ -17,7 +15,6 @@ from tqdm import tqdm
 from psycopg2.extensions import QueryCanceledError
 from time import time
 import gc
-from utils.reporting import upload_results
 
 def get_tokenizer_model(model_name: Optional[str], adapter_path: Optional[str]):
     """
@@ -125,13 +122,15 @@ def run_hf_eval(args):
                     num_beams=num_beams,
                     num_return_sequences=1,
                     return_full_text=False,
-                    eos_token_id=tokenizer.eos_token_id,
-                    pad_token_id=tokenizer.eos_token_id,
+                    # eos_token_id=tokenizer.eos_token_id,
+                    # pad_token_id=tokenizer.eos_token_id,
                 )[0]["generated_text"]
                 if "[SQL]" not in row["prompt"]:
                     generated_query = (
                         generated_query.split("```")[0].split(";")[0].strip() + ";"
                     )
+                else:
+                    generated_query = generated_query.split("[SQL]\n")[-1].split(["[/SQL]"])[0]
 
                 gc.collect()
                 if torch.cuda.is_available():
